@@ -1,0 +1,105 @@
+[[how-to-dynamic-client-registration]]
+= How-to: Register a client dynamically
+:index-link: ../how-to.html
+:docs-dir: ..
+
+This guide shows how to configure OpenID Connect Dynamic Client Registration in Spring Authorization Server and walks through an example of how to register a client.
+Spring Authorization Server implements the https://openid.net/specs/openid-connect-registration-1_0.html[OpenID Connect Dynamic Client Registration 1.0] specification, providing the capability to dynamically register and retrieve OpenID Connect clients.
+
+* xref:guides/how-to-dynamic-client-registration.adoc#enable-dynamic-client-registration[Enable Dynamic Client Registration]
+* xref:guides/how-to-dynamic-client-registration.adoc#configure-client-registrar[Configure client registrar]
+* xref:guides/how-to-dynamic-client-registration.adoc#obtain-initial-access-token[Obtain initial access token]
+* xref:guides/how-to-dynamic-client-registration.adoc#register-client[Register a client]
+
+[[enable-dynamic-client-registration]]
+== Enable Dynamic Client Registration
+
+By default, dynamic client registration functionality is disabled in Spring Authorization Server.
+To enable, add the following configuration:
+
+[[sample.SecurityConfig]]
+[source,java]
+----
+include::{examples-dir}/main/java/sample/registration/SecurityConfig.java[]
+----
+
+<1> Enable the xref:protocol-endpoints.adoc#oidc-client-registration-endpoint[OpenID Connect 1.0 Client Registration Endpoint] with the default configuration.
+
+[[configure-client-registrar]]
+== Configure client registrar
+
+An existing client is used to register new clients with the authorization server.
+The client must be configured with scopes `client.create` and optionally `client.read` for registering clients and retrieving clients, respectively.
+The following listing shows an example client:
+
+[[sample.ClientConfig]]
+[source,java]
+----
+include::{examples-dir}/main/java/sample/registration/ClientConfig.java[]
+----
+
+<1> `client_credentials` grant type is configured to obtain access tokens directly.
+<2> `client.create` scope is configured to allow the client to register a new client.
+<3> `client.read` scope is configured to allow the client to retrieve a registered client.
+
+[[obtain-initial-access-token]]
+== Obtain initial access token
+
+An "initial" access token is required for the client registration request.
+The access token request *MUST* contain the `scope` parameter value `client.create` only.
+
+[source,httprequest]
+----
+POST /oauth2/token HTTP/1.1
+Authorization: Basic <base64-encoded-credentials>
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=client_credentials&scope=client.create
+----
+
+[WARNING]
+====
+The client registration request requires an access token with a single scope of `client.create`.
+If the access token contains additional scope, the client registration request will be denied.
+====
+
+[TIP]
+====
+To obtain encoded credentials for the above request, `base64` encode the client credentials in the format of `<clientId>:<clientSecret>`.
+Below is an encoding operation for the example in this guide.
+
+[source,console]
+----
+echo -n "registrar-client:secret" | base64
+----
+====
+
+[[register-client]]
+== Register a client
+
+With an access token obtained from the previous step, a client can now be dynamically registered.
+
+[NOTE]
+The "initial" access token can only be used once.
+After the client is registered, the access token is invalidated.
+
+[[sample.ClientRegistrar]]
+[source,java]
+----
+include::{examples-dir}/main/java/sample/registration/ClientRegistrar.java[]
+----
+
+<1> A minimal representation of a client registration request. You may add additional client metadata parameters as per https://openid.net/specs/openid-connect-registration-1_0.html#RegistrationRequest[Client Registration Request].
+<2> A minimal representation of a client registration response. You may add additional client metadata parameters as per https://openid.net/specs/openid-connect-registration-1_0.html#RegistrationResponse[Client Registration Response].
+<3> Example demonstrating client registration and client retrieval.
+<4> A sample client registration request object.
+<5> Register the client using the "initial" access token and client registration request object.
+<6> After successful registration, assert on the client metadata parameters that should be populated in the response.
+<7> Extract `registration_access_token` and `registration_client_uri` response parameters, for use in retrieval of the newly registered client.
+<8> Retrieve the client using the `registration_access_token` and `registration_client_uri`.
+<9> After client retrieval, assert on the client metadata parameters that should be populated in the response.
+<10> Sample https://openid.net/specs/openid-connect-registration-1_0.html#RegistrationRequest[Client Registration Request] using `WebClient`.
+<11> Sample https://openid.net/specs/openid-connect-registration-1_0.html#ReadRequest[Client Read Request] using `WebClient`.
+
+[NOTE]
+The https://openid.net/specs/openid-connect-registration-1_0.html#ReadResponse[Client Read Response] should contain the same client metadata parameters as the https://openid.net/specs/openid-connect-registration-1_0.html#RegistrationResponse[Client Registration Response], except the `registration_access_token` parameter.

@@ -104,7 +104,7 @@ public class SpringAsciidoctorPlugin implements Plugin<Project> {
 			project.getConfigurations().matching((candidate) -> "management".equals(candidate.getName()))
 					.all(configuration::extendsFrom);
 			configuration.getDependencies().add(project.getDependencies()
-					.create("io.spring.asciidoctor.backends:spring-asciidoctor-backends:0.0.3"));
+					.create("io.spring.asciidoctor.backends:spring-asciidoctor-backends:0.0.5"));
 			configuration.getDependencies()
 					.add(project.getDependencies().create("org.asciidoctor:asciidoctorj-pdf:1.5.3"));
 		});
@@ -120,6 +120,9 @@ public class SpringAsciidoctorPlugin implements Plugin<Project> {
 				// Not using intermediateWorkDir.
 				// See https://github.com/asciidoctor/asciidoctor-gradle-plugin/issues/523
 				resourcesSrcDirSpec.include("images/*.png", "css/**", "js/**", "**/*.java");
+				// This exclusion is required to allow cacheability of :spring-authorization-server-docs:asciidoctor
+				// The whole docs/src/docs/asciidoc folder is being passed as a task input
+				resourcesSrcDirSpec.exclude("**/examples/build/**");
 			});
 		});
 		if (asciidoctorTask instanceof AsciidoctorTask) {

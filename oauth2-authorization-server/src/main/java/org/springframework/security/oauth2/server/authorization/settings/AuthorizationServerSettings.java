@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 the original author or authors.
+ * Copyright 2020-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,7 +35,7 @@ public final class AuthorizationServerSettings extends AbstractSettings {
 	}
 
 	/**
-	 * Returns the URL of the Authorization Server's Issuer Identifier
+	 * Returns the URL of the Authorization Server's Issuer Identifier.
 	 *
 	 * @return the URL of the Authorization Server's Issuer Identifier
 	 */
@@ -50,6 +50,26 @@ public final class AuthorizationServerSettings extends AbstractSettings {
 	 */
 	public String getAuthorizationEndpoint() {
 		return getSetting(ConfigurationSettingNames.AuthorizationServer.AUTHORIZATION_ENDPOINT);
+	}
+
+	/**
+	 * Returns the OAuth 2.0 Device Authorization endpoint. The default is {@code /oauth2/device_authorization}.
+	 *
+	 * @return the Device Authorization endpoint
+	 * @since 1.1
+	 */
+	public String getDeviceAuthorizationEndpoint() {
+		return getSetting(ConfigurationSettingNames.AuthorizationServer.DEVICE_AUTHORIZATION_ENDPOINT);
+	}
+
+	/**
+	 * Returns the OAuth 2.0 Device Verification endpoint. The default is {@code /oauth2/device_verification}.
+	 *
+	 * @return the Device Verification endpoint
+	 * @since 1.1
+	 */
+	public String getDeviceVerificationEndpoint() {
+		return getSetting(ConfigurationSettingNames.AuthorizationServer.DEVICE_VERIFICATION_ENDPOINT);
 	}
 
 	/**
@@ -107,6 +127,16 @@ public final class AuthorizationServerSettings extends AbstractSettings {
 	}
 
 	/**
+	 * Returns the OpenID Connect 1.0 Logout endpoint. The default is {@code /connect/logout}.
+	 *
+	 * @return the OpenID Connect 1.0 Logout endpoint
+	 * @since 1.1
+	 */
+	public String getOidcLogoutEndpoint() {
+		return getSetting(ConfigurationSettingNames.AuthorizationServer.OIDC_LOGOUT_ENDPOINT);
+	}
+
+	/**
 	 * Constructs a new {@link Builder} with the default settings.
 	 *
 	 * @return the {@link Builder}
@@ -114,12 +144,15 @@ public final class AuthorizationServerSettings extends AbstractSettings {
 	public static Builder builder() {
 		return new Builder()
 				.authorizationEndpoint("/oauth2/authorize")
+				.deviceAuthorizationEndpoint("/oauth2/device_authorization")
+				.deviceVerificationEndpoint("/oauth2/device_verification")
 				.tokenEndpoint("/oauth2/token")
 				.jwkSetEndpoint("/oauth2/jwks")
 				.tokenRevocationEndpoint("/oauth2/revoke")
 				.tokenIntrospectionEndpoint("/oauth2/introspect")
 				.oidcClientRegistrationEndpoint("/connect/register")
-				.oidcUserInfoEndpoint("/userinfo");
+				.oidcUserInfoEndpoint("/userinfo")
+				.oidcLogoutEndpoint("/connect/logout");
 	}
 
 	/**
@@ -160,6 +193,28 @@ public final class AuthorizationServerSettings extends AbstractSettings {
 		 */
 		public Builder authorizationEndpoint(String authorizationEndpoint) {
 			return setting(ConfigurationSettingNames.AuthorizationServer.AUTHORIZATION_ENDPOINT, authorizationEndpoint);
+		}
+
+		/**
+		 * Sets the OAuth 2.0 Device Authorization endpoint.
+		 *
+		 * @param deviceAuthorizationEndpoint the Device Authorization endpoint
+		 * @return the {@link Builder} for further configuration
+		 * @since 1.1
+		 */
+		public Builder deviceAuthorizationEndpoint(String deviceAuthorizationEndpoint) {
+			return setting(ConfigurationSettingNames.AuthorizationServer.DEVICE_AUTHORIZATION_ENDPOINT, deviceAuthorizationEndpoint);
+		}
+
+		/**
+		 * Sets the OAuth 2.0 Device Verification endpoint.
+		 *
+		 * @param deviceVerificationEndpoint the Device Verification endpoint
+		 * @return the {@link Builder} for further configuration
+		 * @since 1.1
+		 */
+		public Builder deviceVerificationEndpoint(String deviceVerificationEndpoint) {
+			return setting(ConfigurationSettingNames.AuthorizationServer.DEVICE_VERIFICATION_ENDPOINT, deviceVerificationEndpoint);
 		}
 
 		/**
@@ -220,6 +275,17 @@ public final class AuthorizationServerSettings extends AbstractSettings {
 		 */
 		public Builder oidcUserInfoEndpoint(String oidcUserInfoEndpoint) {
 			return setting(ConfigurationSettingNames.AuthorizationServer.OIDC_USER_INFO_ENDPOINT, oidcUserInfoEndpoint);
+		}
+
+		/**
+		 * Sets the OpenID Connect 1.0 Logout endpoint.
+		 *
+		 * @param oidcLogoutEndpoint the OpenID Connect 1.0 Logout endpoint
+		 * @return the {@link Builder} for further configuration
+		 * @since 1.1
+		 */
+		public Builder oidcLogoutEndpoint(String oidcLogoutEndpoint) {
+			return setting(ConfigurationSettingNames.AuthorizationServer.OIDC_LOGOUT_ENDPOINT, oidcLogoutEndpoint);
 		}
 
 		/**

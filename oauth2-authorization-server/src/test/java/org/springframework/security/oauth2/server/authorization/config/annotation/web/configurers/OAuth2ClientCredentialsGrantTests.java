@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 the original author or authors.
+ * Copyright 2020-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -55,6 +55,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.NoOpPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
@@ -71,6 +72,7 @@ import org.springframework.security.oauth2.server.authorization.authentication.O
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientAuthenticationToken;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientCredentialsAuthenticationProvider;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientCredentialsAuthenticationToken;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2DeviceCodeAuthenticationProvider;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2RefreshTokenAuthenticationProvider;
 import org.springframework.security.oauth2.server.authorization.authentication.PublicClientAuthenticationProvider;
 import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository;
@@ -89,6 +91,7 @@ import org.springframework.security.oauth2.server.authorization.web.authenticati
 import org.springframework.security.oauth2.server.authorization.web.authentication.JwtClientAssertionAuthenticationConverter;
 import org.springframework.security.oauth2.server.authorization.web.authentication.OAuth2AuthorizationCodeAuthenticationConverter;
 import org.springframework.security.oauth2.server.authorization.web.authentication.OAuth2ClientCredentialsAuthenticationConverter;
+import org.springframework.security.oauth2.server.authorization.web.authentication.OAuth2DeviceCodeAuthenticationConverter;
 import org.springframework.security.oauth2.server.authorization.web.authentication.OAuth2RefreshTokenAuthenticationConverter;
 import org.springframework.security.oauth2.server.authorization.web.authentication.PublicClientAuthenticationConverter;
 import org.springframework.security.web.SecurityFilterChain;
@@ -232,6 +235,28 @@ public class OAuth2ClientCredentialsGrantTests {
 	}
 
 	@Test
+	public void requestWhenTokenRequestPostsClientCredentialsAndRequiresUpgradingThenClientSecretUpgraded() throws Exception {
+		this.spring.register(AuthorizationServerConfigurationCustomPasswordEncoder.class).autowire();
+
+		String clientSecret = "secret-2";
+		RegisteredClient registeredClient = TestRegisteredClients.registeredClient2().clientSecret("{noop}" + clientSecret).build();
+		this.registeredClientRepository.save(registeredClient);
+
+		this.mvc.perform(post(DEFAULT_TOKEN_ENDPOINT_URI)
+						.param(OAuth2ParameterNames.GRANT_TYPE, AuthorizationGrantType.CLIENT_CREDENTIALS.getValue())
+						.param(OAuth2ParameterNames.SCOPE, "scope1 scope2")
+						.param(OAuth2ParameterNames.CLIENT_ID, registeredClient.getClientId())
+						.param(OAuth2ParameterNames.CLIENT_SECRET, clientSecret))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.access_token").isNotEmpty())
+				.andExpect(jsonPath("$.scope").value("scope1 scope2"));
+
+		verify(jwtCustomizer).customize(any());
+		RegisteredClient updatedRegisteredClient = this.registeredClientRepository.findByClientId(registeredClient.getClientId());
+		assertThat(updatedRegisteredClient.getClientSecret()).startsWith("{bcrypt}");
+	}
+
+	@Test
 	public void requestWhenTokenEndpointCustomizedThenUsed() throws Exception {
 		this.spring.register(AuthorizationServerConfigurationCustomTokenEndpoint.class).autowire();
 
@@ -268,7 +293,8 @@ public class OAuth2ClientCredentialsGrantTests {
 				converter == authenticationConverter ||
 						converter instanceof OAuth2AuthorizationCodeAuthenticationConverter ||
 						converter instanceof OAuth2RefreshTokenAuthenticationConverter ||
-						converter instanceof OAuth2ClientCredentialsAuthenticationConverter);
+						converter instanceof OAuth2ClientCredentialsAuthenticationConverter ||
+						converter instanceof OAuth2DeviceCodeAuthenticationConverter);
 
 		verify(authenticationProvider).authenticate(eq(clientCredentialsAuthentication));
 
@@ -280,7 +306,8 @@ public class OAuth2ClientCredentialsGrantTests {
 				provider == authenticationProvider ||
 						provider instanceof OAuth2AuthorizationCodeAuthenticationProvider ||
 						provider instanceof OAuth2RefreshTokenAuthenticationProvider ||
-						provider instanceof OAuth2ClientCredentialsAuthenticationProvider);
+						provider instanceof OAuth2ClientCredentialsAuthenticationProvider ||
+						provider instanceof OAuth2DeviceCodeAuthenticationProvider);
 
 		verify(authenticationSuccessHandler).onAuthenticationSuccess(any(), any(), eq(accessTokenAuthentication));
 	}
@@ -427,6 +454,15 @@ public class OAuth2ClientCredentialsGrantTests {
 			return http.build();
 		}
 		// @formatter:on
+	}
+
+	@EnableWebSecurity
+	@Configuration(proxyBeanMethods = false)
+	static class AuthorizationServerConfigurationCustomPasswordEncoder extends AuthorizationServerConfiguration {
+		@Override
+		PasswordEncoder passwordEncoder() {
+			return PasswordEncoderFactories.createDelegatingPasswordEncoder();
+		}
 	}
 
 	@EnableWebSecurity

@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 the original author or authors.
+ * Copyright 2020-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import java.time.Instant;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
+import org.springframework.core.log.LogMessage;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
@@ -114,12 +115,23 @@ public final class ClientSecretAuthenticationProvider implements AuthenticationP
 
 		String clientSecret = clientAuthentication.getCredentials().toString();
 		if (!this.passwordEncoder.matches(clientSecret, registeredClient.getClientSecret())) {
+			if (this.logger.isDebugEnabled()) {
+				this.logger.debug(LogMessage.format("Invalid request: client_secret does not match" +
+						" for registered client '%s'", registeredClient.getId()));
+			}
 			throwInvalidClient(OAuth2ParameterNames.CLIENT_SECRET);
 		}
 
 		if (registeredClient.getClientSecretExpiresAt() != null &&
 				Instant.now().isAfter(registeredClient.getClientSecretExpiresAt())) {
 			throwInvalidClient("client_secret_expires_at");
+		}
+
+		if (this.passwordEncoder.upgradeEncoding(registeredClient.getClientSecret())) {
+			registeredClient = RegisteredClient.from(registeredClient)
+					.clientSecret(this.passwordEncoder.encode(clientSecret))
+					.build();
+			this.registeredClientRepository.save(registeredClient);
 		}
 
 		if (this.logger.isTraceEnabled()) {

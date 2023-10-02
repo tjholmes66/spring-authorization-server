@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 the original author or authors.
+ * Copyright 2020-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,8 +18,10 @@ package org.springframework.security.oauth2.server.authorization.token;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Collections;
+import java.util.Date;
 
 import org.springframework.lang.Nullable;
+import org.springframework.security.core.session.SessionInformation;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.OAuth2AccessToken;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
@@ -125,8 +127,20 @@ public final class JwtGenerator implements OAuth2TokenGenerator<Jwt> {
 				if (StringUtils.hasText(nonce)) {
 					claimsBuilder.claim(IdTokenClaimNames.NONCE, nonce);
 				}
+				SessionInformation sessionInformation = context.get(SessionInformation.class);
+				if (sessionInformation != null) {
+					claimsBuilder.claim("sid", sessionInformation.getSessionId());
+					claimsBuilder.claim(IdTokenClaimNames.AUTH_TIME, sessionInformation.getLastRequest());
+				}
+			} else if (AuthorizationGrantType.REFRESH_TOKEN.equals(context.getAuthorizationGrantType())) {
+				OidcIdToken currentIdToken = context.getAuthorization().getToken(OidcIdToken.class).getToken();
+				if (currentIdToken.hasClaim("sid")) {
+					claimsBuilder.claim("sid", currentIdToken.getClaim("sid"));
+				}
+				if (currentIdToken.hasClaim(IdTokenClaimNames.AUTH_TIME)) {
+					claimsBuilder.claim(IdTokenClaimNames.AUTH_TIME, currentIdToken.<Date>getClaim(IdTokenClaimNames.AUTH_TIME));
+				}
 			}
-			// TODO Add 'auth_time' claim
 		}
 		// @formatter:on
 
@@ -146,6 +160,12 @@ public final class JwtGenerator implements OAuth2TokenGenerator<Jwt> {
 			}
 			if (context.getAuthorizationGrant() != null) {
 				jwtContextBuilder.authorizationGrant(context.getAuthorizationGrant());
+			}
+			if (OidcParameterNames.ID_TOKEN.equals(context.getTokenType().getValue())) {
+				SessionInformation sessionInformation = context.get(SessionInformation.class);
+				if (sessionInformation != null) {
+					jwtContextBuilder.put(SessionInformation.class, sessionInformation);
+				}
 			}
 			// @formatter:on
 

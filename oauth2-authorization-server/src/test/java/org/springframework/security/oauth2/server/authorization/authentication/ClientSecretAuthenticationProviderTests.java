@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 the original author or authors.
+ * Copyright 2020-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -84,6 +84,11 @@ public class ClientSecretAuthenticationProviderTests {
 			@Override
 			public boolean matches(CharSequence rawPassword, String encodedPassword) {
 				return NoOpPasswordEncoder.getInstance().matches(rawPassword, encodedPassword);
+			}
+
+			@Override
+			public boolean upgradeEncoding(String encodedPassword) {
+				return true;
 			}
 		});
 		this.authenticationProvider.setPasswordEncoder(this.passwordEncoder);
@@ -220,6 +225,27 @@ public class ClientSecretAuthenticationProviderTests {
 		assertThat(authenticationResult.getPrincipal().toString()).isEqualTo(registeredClient.getClientId());
 		assertThat(authenticationResult.getCredentials().toString()).isEqualTo(registeredClient.getClientSecret());
 		assertThat(authenticationResult.getRegisteredClient()).isEqualTo(registeredClient);
+	}
+
+	@Test
+	public void authenticateWhenValidCredentialsAndRequiresUpgradingThenClientSecretUpgraded() {
+		RegisteredClient registeredClient = TestRegisteredClients.registeredClient().build();
+		when(this.registeredClientRepository.findByClientId(eq(registeredClient.getClientId())))
+				.thenReturn(registeredClient);
+
+		OAuth2ClientAuthenticationToken authentication = new OAuth2ClientAuthenticationToken(
+				registeredClient.getClientId(), ClientAuthenticationMethod.CLIENT_SECRET_BASIC, registeredClient.getClientSecret(), null);
+		OAuth2ClientAuthenticationToken authenticationResult =
+				(OAuth2ClientAuthenticationToken) this.authenticationProvider.authenticate(authentication);
+
+		verify(this.passwordEncoder).matches(any(), any());
+		verify(this.passwordEncoder).upgradeEncoding(any());
+		verify(this.passwordEncoder).encode(any());
+		verify(this.registeredClientRepository).save(any());
+		assertThat(authenticationResult.isAuthenticated()).isTrue();
+		assertThat(authenticationResult.getPrincipal().toString()).isEqualTo(registeredClient.getClientId());
+		assertThat(authenticationResult.getCredentials().toString()).isEqualTo(registeredClient.getClientSecret());
+		assertThat(authenticationResult.getRegisteredClient()).isNotSameAs(registeredClient);
 	}
 
 	@Test

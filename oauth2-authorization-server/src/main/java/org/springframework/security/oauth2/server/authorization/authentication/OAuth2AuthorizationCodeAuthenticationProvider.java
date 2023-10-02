@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 the original author or authors.
+ * Copyright 2020-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,9 +15,16 @@
  */
 package org.springframework.security.oauth2.server.authorization.authentication;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.Principal;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.apache.commons.logging.Log;
@@ -27,6 +34,8 @@ import org.springframework.core.log.LogMessage;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.core.session.SessionInformation;
+import org.springframework.security.core.session.SessionRegistry;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClaimAccessor;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
@@ -52,6 +61,7 @@ import org.springframework.security.oauth2.server.authorization.token.DefaultOAu
 import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenContext;
 import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenGenerator;
 import org.springframework.util.Assert;
+import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
 import static org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthenticationProviderUtils.getAuthenticatedClientElseThrowInvalidClient;
@@ -79,6 +89,7 @@ public final class OAuth2AuthorizationCodeAuthenticationProvider implements Auth
 	private final Log logger = LogFactory.getLog(getClass());
 	private final OAuth2AuthorizationService authorizationService;
 	private final OAuth2TokenGenerator<? extends OAuth2Token> tokenGenerator;
+	private SessionRegistry sessionRegistry;
 
 	/**
 	 * Constructs an {@code OAuth2AuthorizationCodeAuthenticationProvider} using the provided parameters.
@@ -142,6 +153,19 @@ public final class OAuth2AuthorizationCodeAuthenticationProvider implements Auth
 		}
 
 		if (!authorizationCode.isActive()) {
+			if (authorizationCode.isInvalidated()) {
+				OAuth2Authorization.Token<? extends OAuth2Token> token = authorization.getRefreshToken() != null ?
+						authorization.getRefreshToken() :
+						authorization.getAccessToken();
+				if (token != null) {
+					// Invalidate the access (and refresh) token as the client is attempting to use the authorization code more than once
+					authorization = OAuth2AuthenticationProviderUtils.invalidate(authorization, token.getToken());
+					this.authorizationService.save(authorization);
+					if (this.logger.isWarnEnabled()) {
+						this.logger.warn(LogMessage.format("Invalidated authorization token(s) previously issued to registered client '%s'", registeredClient.getId()));
+					}
+				}
+			}
 			throw new OAuth2AuthenticationException(OAuth2ErrorCodes.INVALID_GRANT);
 		}
 
@@ -149,10 +173,12 @@ public final class OAuth2AuthorizationCodeAuthenticationProvider implements Auth
 			this.logger.trace("Validated token request parameters");
 		}
 
+		Authentication principal = authorization.getAttribute(Principal.class.getName());
+
 		// @formatter:off
 		DefaultOAuth2TokenContext.Builder tokenContextBuilder = DefaultOAuth2TokenContext.builder()
 				.registeredClient(registeredClient)
-				.principal(authorization.getAttribute(Principal.class.getName()))
+				.principal(principal)
 				.authorizationServerContext(AuthorizationServerContextHolder.getContext())
 				.authorization(authorization)
 				.authorizedScopes(authorization.getAuthorizedScopes())
@@ -210,6 +236,19 @@ public final class OAuth2AuthorizationCodeAuthenticationProvider implements Auth
 		// ----- ID token -----
 		OidcIdToken idToken;
 		if (authorizationRequest.getScopes().contains(OidcScopes.OPENID)) {
+			SessionInformation sessionInformation = getSessionInformation(principal);
+			if (sessionInformation != null) {
+				try {
+					// Compute (and use) hash for Session ID
+					sessionInformation = new SessionInformation(sessionInformation.getPrincipal(),
+							createHash(sessionInformation.getSessionId()), sessionInformation.getLastRequest());
+				} catch (NoSuchAlgorithmException ex) {
+					OAuth2Error error = new OAuth2Error(OAuth2ErrorCodes.SERVER_ERROR,
+							"Failed to compute hash for Session ID.", ERROR_URI);
+					throw new OAuth2AuthenticationException(error);
+				}
+				tokenContextBuilder.put(SessionInformation.class, sessionInformation);
+			}
 			// @formatter:off
 			tokenContext = tokenContextBuilder
 					.tokenType(ID_TOKEN_TOKEN_TYPE)
@@ -263,6 +302,40 @@ public final class OAuth2AuthorizationCodeAuthenticationProvider implements Auth
 	@Override
 	public boolean supports(Class<?> authentication) {
 		return OAuth2AuthorizationCodeAuthenticationToken.class.isAssignableFrom(authentication);
+	}
+
+	/**
+	 * Sets the {@link SessionRegistry} used to track OpenID Connect sessions.
+	 *
+	 * @param sessionRegistry the {@link SessionRegistry} used to track OpenID Connect sessions
+	 * @since 1.1
+	 */
+	public void setSessionRegistry(SessionRegistry sessionRegistry) {
+		Assert.notNull(sessionRegistry, "sessionRegistry cannot be null");
+		this.sessionRegistry = sessionRegistry;
+	}
+
+	private SessionInformation getSessionInformation(Authentication principal) {
+		SessionInformation sessionInformation = null;
+		if (this.sessionRegistry != null) {
+			List<SessionInformation> sessions = this.sessionRegistry.getAllSessions(principal.getPrincipal(), false);
+			if (!CollectionUtils.isEmpty(sessions)) {
+				sessionInformation = sessions.get(0);
+				if (sessions.size() > 1) {
+					// Get the most recent session
+					sessions = new ArrayList<>(sessions);
+					sessions.sort(Comparator.comparing(SessionInformation::getLastRequest));
+					sessionInformation = sessions.get(sessions.size() - 1);
+				}
+			}
+		}
+		return sessionInformation;
+	}
+
+	private static String createHash(String value) throws NoSuchAlgorithmException {
+		MessageDigest md = MessageDigest.getInstance("SHA-256");
+		byte[] digest = md.digest(value.getBytes(StandardCharsets.US_ASCII));
+		return Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
 	}
 
 }

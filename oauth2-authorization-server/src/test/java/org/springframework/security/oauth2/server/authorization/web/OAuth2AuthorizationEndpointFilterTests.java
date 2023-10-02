@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 the original author or authors.
+ * Copyright 2020-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,6 +58,7 @@ import org.springframework.security.web.authentication.AuthenticationConverter;
 import org.springframework.security.web.authentication.AuthenticationFailureHandler;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.security.web.authentication.WebAuthenticationDetails;
+import org.springframework.security.web.authentication.session.SessionAuthenticationStrategy;
 import org.springframework.util.StringUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -149,6 +150,13 @@ public class OAuth2AuthorizationEndpointFilterTests {
 		assertThatThrownBy(() -> this.filter.setAuthenticationFailureHandler(null))
 				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessage("authenticationFailureHandler cannot be null");
+	}
+
+	@Test
+	public void setSessionAuthenticationStrategyWhenNullThenThrowIllegalArgumentException() {
+		assertThatThrownBy(() -> this.filter.setSessionAuthenticationStrategy(null))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessage("sessionAuthenticationStrategy cannot be null");
 	}
 
 	@Test
@@ -280,12 +288,17 @@ public class OAuth2AuthorizationEndpointFilterTests {
 
 	@Test
 	public void doFilterWhenAuthorizationRequestAuthenticationExceptionThenErrorResponse() throws Exception {
-		RegisteredClient registeredClient = TestRegisteredClients.registeredClient().build();
+		RegisteredClient registeredClient = TestRegisteredClients.registeredClient()
+				.redirectUris(redirectUris -> {
+					redirectUris.clear();
+					redirectUris.add("https://example.com?param=encoded%20parameter%20value");
+				})
+				.build();
 		OAuth2AuthorizationCodeRequestAuthenticationToken authorizationCodeRequestAuthentication =
 				new OAuth2AuthorizationCodeRequestAuthenticationToken(
 						AUTHORIZATION_URI, registeredClient.getClientId(), principal,
-						registeredClient.getRedirectUris().iterator().next(), STATE, registeredClient.getScopes(), null);
-		OAuth2Error error = new OAuth2Error("errorCode", "errorDescription", "errorUri");
+						registeredClient.getRedirectUris().iterator().next(), "client state", registeredClient.getScopes(), null);
+		OAuth2Error error = new OAuth2Error(OAuth2ErrorCodes.INVALID_REQUEST, "error description", "error uri");
 		when(this.authenticationManager.authenticate(any()))
 				.thenThrow(new OAuth2AuthorizationCodeRequestAuthenticationException(error, authorizationCodeRequestAuthentication));
 
@@ -299,7 +312,8 @@ public class OAuth2AuthorizationEndpointFilterTests {
 		verifyNoInteractions(filterChain);
 
 		assertThat(response.getStatus()).isEqualTo(HttpStatus.FOUND.value());
-		assertThat(response.getRedirectedUrl()).isEqualTo("https://example.com?error=errorCode&error_description=errorDescription&error_uri=errorUri&state=state");
+		assertThat(response.getRedirectedUrl()).isEqualTo(
+				"https://example.com?param=encoded%20parameter%20value&error=invalid_request&error_description=error%20description&error_uri=error%20uri&state=client%20state");
 		assertThat(SecurityContextHolder.getContext().getAuthentication()).isSameAs(this.principal);
 	}
 
@@ -379,6 +393,31 @@ public class OAuth2AuthorizationEndpointFilterTests {
 		verify(this.authenticationManager).authenticate(any());
 		verifyNoInteractions(filterChain);
 		verify(authenticationFailureHandler).onAuthenticationFailure(any(), any(), same(authenticationException));
+	}
+
+	@Test
+	public void doFilterWhenCustomSessionAuthenticationStrategyThenUsed() throws Exception {
+		RegisteredClient registeredClient = TestRegisteredClients.registeredClient().build();
+		OAuth2AuthorizationCodeRequestAuthenticationToken authorizationCodeRequestAuthenticationResult =
+				new OAuth2AuthorizationCodeRequestAuthenticationToken(
+						AUTHORIZATION_URI, registeredClient.getClientId(), principal, this.authorizationCode,
+						registeredClient.getRedirectUris().iterator().next(), STATE, registeredClient.getScopes());
+		authorizationCodeRequestAuthenticationResult.setAuthenticated(true);
+		when(this.authenticationManager.authenticate(any()))
+				.thenReturn(authorizationCodeRequestAuthenticationResult);
+
+		SessionAuthenticationStrategy sessionAuthenticationStrategy = mock(SessionAuthenticationStrategy.class);
+		this.filter.setSessionAuthenticationStrategy(sessionAuthenticationStrategy);
+
+		MockHttpServletRequest request = createAuthorizationRequest(registeredClient);
+		MockHttpServletResponse response = new MockHttpServletResponse();
+		FilterChain filterChain = mock(FilterChain.class);
+
+		this.filter.doFilter(request, response, filterChain);
+
+		verify(this.authenticationManager).authenticate(any());
+		verifyNoInteractions(filterChain);
+		verify(sessionAuthenticationStrategy).onAuthentication(same(authorizationCodeRequestAuthenticationResult), any(), any());
 	}
 
 	@Test
@@ -535,16 +574,23 @@ public class OAuth2AuthorizationEndpointFilterTests {
 
 	@Test
 	public void doFilterWhenAuthorizationRequestAuthenticatedThenAuthorizationResponse() throws Exception {
-		RegisteredClient registeredClient = TestRegisteredClients.registeredClient().build();
+		RegisteredClient registeredClient = TestRegisteredClients.registeredClient()
+				.redirectUris(redirectUris -> {
+					redirectUris.clear();
+					redirectUris.add("https://example.com?param=encoded%20parameter%20value");
+				})
+				.build();
 		OAuth2AuthorizationCodeRequestAuthenticationToken authorizationCodeRequestAuthenticationResult =
 				new OAuth2AuthorizationCodeRequestAuthenticationToken(
 						AUTHORIZATION_URI, registeredClient.getClientId(), principal, this.authorizationCode,
-						registeredClient.getRedirectUris().iterator().next(), STATE, registeredClient.getScopes());
+						registeredClient.getRedirectUris().iterator().next(), "client state", registeredClient.getScopes());
 		authorizationCodeRequestAuthenticationResult.setAuthenticated(true);
 		when(this.authenticationManager.authenticate(any()))
 				.thenReturn(authorizationCodeRequestAuthenticationResult);
 
 		MockHttpServletRequest request = createAuthorizationRequest(registeredClient);
+		request.addParameter("custom-param", "custom-value-1", "custom-value-2");
+
 		MockHttpServletResponse response = new MockHttpServletResponse();
 		FilterChain filterChain = mock(FilterChain.class);
 
@@ -559,8 +605,15 @@ public class OAuth2AuthorizationEndpointFilterTests {
 				.asInstanceOf(type(WebAuthenticationDetails.class))
 				.extracting(WebAuthenticationDetails::getRemoteAddress)
 				.isEqualTo(REMOTE_ADDRESS);
+
+		// Assert that multi-valued request parameters are preserved
+		assertThat(authorizationCodeRequestAuthenticationCaptor.getValue().getAdditionalParameters())
+				.extracting(params -> params.get("custom-param"))
+				.asInstanceOf(type(String[].class))
+				.isEqualTo(new String[] { "custom-value-1", "custom-value-2" });
 		assertThat(response.getStatus()).isEqualTo(HttpStatus.FOUND.value());
-		assertThat(response.getRedirectedUrl()).isEqualTo("https://example.com?code=code&state=state");
+		assertThat(response.getRedirectedUrl()).isEqualTo(
+				"https://example.com?param=encoded%20parameter%20value&code=code&state=client%20state");
 	}
 
 	@Test
@@ -591,7 +644,8 @@ public class OAuth2AuthorizationEndpointFilterTests {
 		verifyNoInteractions(filterChain);
 
 		assertThat(response.getStatus()).isEqualTo(HttpStatus.FOUND.value());
-		assertThat(response.getRedirectedUrl()).isEqualTo("https://example.com?code=code&state=state");
+		assertThat(response.getRedirectedUrl()).isEqualTo(
+				request.getParameter(OAuth2ParameterNames.REDIRECT_URI) + "?code=code&state=state");
 	}
 
 	private void doFilterWhenAuthorizationRequestInvalidParameterThenError(RegisteredClient registeredClient,

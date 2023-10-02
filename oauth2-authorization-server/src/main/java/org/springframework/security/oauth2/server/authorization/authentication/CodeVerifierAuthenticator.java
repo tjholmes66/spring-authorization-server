@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 the original author or authors.
+ * Copyright 2020-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ import java.util.Map;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
+import org.springframework.core.log.LogMessage;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.core.OAuth2Error;
@@ -96,6 +97,10 @@ final class CodeVerifierAuthenticator {
 				.get(PkceParameterNames.CODE_CHALLENGE);
 		if (!StringUtils.hasText(codeChallenge)) {
 			if (registeredClient.getClientSettings().isRequireProofKey()) {
+				if (this.logger.isDebugEnabled()) {
+					this.logger.debug(LogMessage.format("Invalid request: code_challenge is required" +
+							" for registered client '%s'", registeredClient.getId()));
+				}
 				throwInvalidGrant(PkceParameterNames.CODE_CHALLENGE);
 			} else {
 				if (this.logger.isTraceEnabled()) {
@@ -113,6 +118,10 @@ final class CodeVerifierAuthenticator {
 				.get(PkceParameterNames.CODE_CHALLENGE_METHOD);
 		String codeVerifier = (String) parameters.get(PkceParameterNames.CODE_VERIFIER);
 		if (!codeVerifierValid(codeVerifier, codeChallenge, codeChallengeMethod)) {
+			if (this.logger.isDebugEnabled()) {
+				this.logger.debug(LogMessage.format("Invalid request: code_verifier is missing or invalid" +
+						" for registered client '%s'", registeredClient.getId()));
+			}
 			throwInvalidGrant(PkceParameterNames.CODE_VERIFIER);
 		}
 
@@ -129,7 +138,7 @@ final class CodeVerifierAuthenticator {
 				parameters.get(OAuth2ParameterNames.CODE) != null;
 	}
 
-	private static boolean codeVerifierValid(String codeVerifier, String codeChallenge, String codeChallengeMethod) {
+	private boolean codeVerifierValid(String codeVerifier, String codeChallenge, String codeChallengeMethod) {
 		if (!StringUtils.hasText(codeVerifier)) {
 			return false;
 		} else if ("S256".equals(codeChallengeMethod)) {

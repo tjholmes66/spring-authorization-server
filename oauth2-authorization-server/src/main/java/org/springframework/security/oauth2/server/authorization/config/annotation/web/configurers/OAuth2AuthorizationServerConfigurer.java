@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 the original author or authors.
+ * Copyright 2020-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,12 +23,19 @@ import java.util.Map;
 
 import com.nimbusds.jose.jwk.source.JWKSource;
 
+import org.springframework.context.ApplicationListener;
+import org.springframework.context.event.GenericApplicationListenerAdapter;
+import org.springframework.context.event.SmartApplicationListener;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.annotation.web.configurers.ExceptionHandlingConfigurer;
+import org.springframework.security.context.DelegatingApplicationListener;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.session.SessionRegistry;
+import org.springframework.security.core.session.SessionRegistryImpl;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.OAuth2ErrorCodes;
 import org.springframework.security.oauth2.core.OAuth2Token;
@@ -65,6 +72,8 @@ import org.springframework.util.Assert;
  * @see OAuth2TokenEndpointConfigurer
  * @see OAuth2TokenIntrospectionEndpointConfigurer
  * @see OAuth2TokenRevocationEndpointConfigurer
+ * @see OAuth2DeviceAuthorizationEndpointConfigurer
+ * @see OAuth2DeviceVerificationEndpointConfigurer
  * @see OidcConfigurer
  * @see RegisteredClientRepository
  * @see OAuth2AuthorizationService
@@ -209,6 +218,30 @@ public final class OAuth2AuthorizationServerConfigurer
 	}
 
 	/**
+	 * Configures the OAuth 2.0 Device Authorization Endpoint.
+	 *
+	 * @param deviceAuthorizationEndpointCustomizer the {@link Customizer} providing access to the {@link OAuth2DeviceAuthorizationEndpointConfigurer}
+	 * @return the {@link OAuth2AuthorizationServerConfigurer} for further configuration
+	 * @since 1.1
+	 */
+	public OAuth2AuthorizationServerConfigurer deviceAuthorizationEndpoint(Customizer<OAuth2DeviceAuthorizationEndpointConfigurer> deviceAuthorizationEndpointCustomizer) {
+		deviceAuthorizationEndpointCustomizer.customize(getConfigurer(OAuth2DeviceAuthorizationEndpointConfigurer.class));
+		return this;
+	}
+
+	/**
+	 * Configures the OAuth 2.0 Device Verification Endpoint.
+	 *
+	 * @param deviceVerificationEndpointCustomizer the {@link Customizer} providing access to the {@link OAuth2DeviceVerificationEndpointConfigurer}
+	 * @return the {@link OAuth2AuthorizationServerConfigurer} for further configuration
+	 * @since 1.1
+	 */
+	public OAuth2AuthorizationServerConfigurer deviceVerificationEndpoint(Customizer<OAuth2DeviceVerificationEndpointConfigurer> deviceVerificationEndpointCustomizer) {
+		deviceVerificationEndpointCustomizer.customize(getConfigurer(OAuth2DeviceVerificationEndpointConfigurer.class));
+		return this;
+	}
+
+	/**
 	 * Configures OpenID Connect 1.0 support (disabled by default).
 	 *
 	 * @param oidcCustomizer the {@link Customizer} providing access to the {@link OidcConfigurer}
@@ -240,8 +273,24 @@ public final class OAuth2AuthorizationServerConfigurer
 		AuthorizationServerSettings authorizationServerSettings = OAuth2ConfigurerUtils.getAuthorizationServerSettings(httpSecurity);
 		validateAuthorizationServerSettings(authorizationServerSettings);
 
-		OidcConfigurer oidcConfigurer = getConfigurer(OidcConfigurer.class);
-		if (oidcConfigurer == null) {
+		if (isOidcEnabled()) {
+			// Add OpenID Connect session tracking capabilities.
+			initSessionRegistry(httpSecurity);
+			SessionRegistry sessionRegistry = httpSecurity.getSharedObject(SessionRegistry.class);
+			OAuth2AuthorizationEndpointConfigurer authorizationEndpointConfigurer =
+					getConfigurer(OAuth2AuthorizationEndpointConfigurer.class);
+			authorizationEndpointConfigurer.setSessionAuthenticationStrategy((authentication, request, response) -> {
+				if (authentication instanceof OAuth2AuthorizationCodeRequestAuthenticationToken authorizationCodeRequestAuthentication) {
+					if (authorizationCodeRequestAuthentication.getScopes().contains(OidcScopes.OPENID)) {
+						if (sessionRegistry.getSessionInformation(request.getSession().getId()) == null) {
+							sessionRegistry.registerNewSession(
+									request.getSession().getId(),
+									((Authentication) authorizationCodeRequestAuthentication.getPrincipal()).getPrincipal());
+						}
+					}
+				}
+			});
+		} else {
 			// OpenID Connect is disabled.
 			// Add an authentication validator that rejects authentication requests.
 			OAuth2AuthorizationEndpointConfigurer authorizationEndpointConfigurer =
@@ -275,7 +324,8 @@ public final class OAuth2AuthorizationServerConfigurer
 					new OrRequestMatcher(
 							getRequestMatcher(OAuth2TokenEndpointConfigurer.class),
 							getRequestMatcher(OAuth2TokenIntrospectionEndpointConfigurer.class),
-							getRequestMatcher(OAuth2TokenRevocationEndpointConfigurer.class))
+							getRequestMatcher(OAuth2TokenRevocationEndpointConfigurer.class),
+							getRequestMatcher(OAuth2DeviceAuthorizationEndpointConfigurer.class))
 			);
 		}
 	}
@@ -297,6 +347,10 @@ public final class OAuth2AuthorizationServerConfigurer
 		}
 	}
 
+	private boolean isOidcEnabled() {
+		return getConfigurer(OidcConfigurer.class) != null;
+	}
+
 	private Map<Class<? extends AbstractOAuth2Configurer>, AbstractOAuth2Configurer> createConfigurers() {
 		Map<Class<? extends AbstractOAuth2Configurer>, AbstractOAuth2Configurer> configurers = new LinkedHashMap<>();
 		configurers.put(OAuth2ClientAuthenticationConfigurer.class, new OAuth2ClientAuthenticationConfigurer(this::postProcess));
@@ -305,6 +359,8 @@ public final class OAuth2AuthorizationServerConfigurer
 		configurers.put(OAuth2TokenEndpointConfigurer.class, new OAuth2TokenEndpointConfigurer(this::postProcess));
 		configurers.put(OAuth2TokenIntrospectionEndpointConfigurer.class, new OAuth2TokenIntrospectionEndpointConfigurer(this::postProcess));
 		configurers.put(OAuth2TokenRevocationEndpointConfigurer.class, new OAuth2TokenRevocationEndpointConfigurer(this::postProcess));
+		configurers.put(OAuth2DeviceAuthorizationEndpointConfigurer.class, new OAuth2DeviceAuthorizationEndpointConfigurer(this::postProcess));
+		configurers.put(OAuth2DeviceVerificationEndpointConfigurer.class, new OAuth2DeviceVerificationEndpointConfigurer(this::postProcess));
 		return configurers;
 	}
 
@@ -336,6 +392,25 @@ public final class OAuth2AuthorizationServerConfigurer
 				throw new IllegalArgumentException("issuer cannot contain query or fragment component");
 			}
 		}
+	}
+
+	private static void initSessionRegistry(HttpSecurity httpSecurity) {
+		SessionRegistry sessionRegistry = OAuth2ConfigurerUtils.getOptionalBean(httpSecurity, SessionRegistry.class);
+		if (sessionRegistry == null) {
+			sessionRegistry = new SessionRegistryImpl();
+			registerDelegateApplicationListener(httpSecurity, (SessionRegistryImpl) sessionRegistry);
+		}
+		httpSecurity.setSharedObject(SessionRegistry.class, sessionRegistry);
+	}
+
+	private static void registerDelegateApplicationListener(HttpSecurity httpSecurity, ApplicationListener<?> delegate) {
+		DelegatingApplicationListener delegatingApplicationListener =
+				OAuth2ConfigurerUtils.getOptionalBean(httpSecurity, DelegatingApplicationListener.class);
+		if (delegatingApplicationListener == null) {
+			return;
+		}
+		SmartApplicationListener smartListener = new GenericApplicationListenerAdapter(delegate);
+		delegatingApplicationListener.addListener(smartListener);
 	}
 
 }

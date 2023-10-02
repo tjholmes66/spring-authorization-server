@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 the original author or authors.
+ * Copyright 2020-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,10 @@ package org.springframework.security.oauth2.server.authorization.authentication;
 import java.util.Set;
 import java.util.function.Consumer;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
+import org.springframework.core.log.LogMessage;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.OAuth2ErrorCodes;
@@ -47,6 +51,7 @@ import org.springframework.web.util.UriComponentsBuilder;
  */
 public final class OAuth2AuthorizationCodeRequestAuthenticationValidator implements Consumer<OAuth2AuthorizationCodeRequestAuthenticationContext> {
 	private static final String ERROR_URI = "https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.2.1";
+	private static final Log LOGGER = LogFactory.getLog(OAuth2AuthorizationCodeRequestAuthenticationValidator.class);
 
 	/**
 	 * The default validator for {@link OAuth2AuthorizationCodeRequestAuthenticationToken#getScopes()}.
@@ -76,6 +81,10 @@ public final class OAuth2AuthorizationCodeRequestAuthenticationValidator impleme
 		Set<String> requestedScopes = authorizationCodeRequestAuthentication.getScopes();
 		Set<String> allowedScopes = registeredClient.getScopes();
 		if (!requestedScopes.isEmpty() && !allowedScopes.containsAll(requestedScopes)) {
+			if (LOGGER.isDebugEnabled()) {
+				LOGGER.debug(LogMessage.format("Invalid request: requested scope is not allowed" +
+						" for registered client '%s'", registeredClient.getId()));
+			}
 			throwError(OAuth2ErrorCodes.INVALID_SCOPE, OAuth2ParameterNames.SCOPE,
 					authorizationCodeRequestAuthentication, registeredClient);
 		}
@@ -96,27 +105,16 @@ public final class OAuth2AuthorizationCodeRequestAuthenticationValidator impleme
 				requestedRedirect = UriComponentsBuilder.fromUriString(requestedRedirectUri).build();
 			} catch (Exception ex) { }
 			if (requestedRedirect == null || requestedRedirect.getFragment() != null) {
+				if (LOGGER.isDebugEnabled()) {
+					LOGGER.debug(LogMessage.format("Invalid request: redirect_uri is missing or contains a fragment" +
+							" for registered client '%s'", registeredClient.getId()));
+				}
 				throwError(OAuth2ErrorCodes.INVALID_REQUEST, OAuth2ParameterNames.REDIRECT_URI,
 						authorizationCodeRequestAuthentication, registeredClient);
 			}
 
-			String requestedRedirectHost = requestedRedirect.getHost();
-			if (requestedRedirectHost == null || requestedRedirectHost.equals("localhost")) {
-				// As per https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-07#section-9.7.1
-				// While redirect URIs using localhost (i.e., "http://localhost:{port}/{path}")
-				// function similarly to loopback IP redirects described in Section 10.3.3,
-				// the use of "localhost" is NOT RECOMMENDED.
-				OAuth2Error error = new OAuth2Error(
-						OAuth2ErrorCodes.INVALID_REQUEST,
-						"localhost is not allowed for the redirect_uri (" + requestedRedirectUri + "). " +
-								"Use the IP literal (127.0.0.1) instead.",
-						"https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-07#section-9.7.1");
-				throwError(error, OAuth2ParameterNames.REDIRECT_URI,
-						authorizationCodeRequestAuthentication, registeredClient);
-			}
-
-			if (!isLoopbackAddress(requestedRedirectHost)) {
-				// As per https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-07#section-9.7
+			if (!isLoopbackAddress(requestedRedirect.getHost())) {
+				// As per https://datatracker.ietf.org/doc/html/draft-ietf-oauth-security-topics-22#section-4.1.3
 				// When comparing client redirect URIs against pre-registered URIs,
 				// authorization servers MUST utilize exact string matching.
 				if (!registeredClient.getRedirectUris().contains(requestedRedirectUri)) {
@@ -124,7 +122,7 @@ public final class OAuth2AuthorizationCodeRequestAuthenticationValidator impleme
 							authorizationCodeRequestAuthentication, registeredClient);
 				}
 			} else {
-				// As per https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-07#section-10.3.3
+				// As per https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-08#section-8.4.2
 				// The authorization server MUST allow any port to be specified at the
 				// time of the request for loopback IP redirect URIs, to accommodate
 				// clients that obtain an available ephemeral port from the operating
@@ -139,6 +137,10 @@ public final class OAuth2AuthorizationCodeRequestAuthenticationValidator impleme
 					}
 				}
 				if (!validRedirectUri) {
+					if (LOGGER.isDebugEnabled()) {
+						LOGGER.debug(LogMessage.format("Invalid request: redirect_uri does not match" +
+								" for registered client '%s'", registeredClient.getId()));
+					}
 					throwError(OAuth2ErrorCodes.INVALID_REQUEST, OAuth2ParameterNames.REDIRECT_URI,
 							authorizationCodeRequestAuthentication, registeredClient);
 				}
@@ -157,6 +159,9 @@ public final class OAuth2AuthorizationCodeRequestAuthenticationValidator impleme
 	}
 
 	private static boolean isLoopbackAddress(String host) {
+		if (!StringUtils.hasText(host)) {
+			return false;
+		}
 		// IPv6 loopback address should either be "0:0:0:0:0:0:0:1" or "::1"
 		if ("[0:0:0:0:0:0:0:1]".equals(host) || "[::1]".equals(host)) {
 			return true;

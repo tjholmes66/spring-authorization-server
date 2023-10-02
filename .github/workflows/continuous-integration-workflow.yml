@@ -18,16 +18,16 @@ jobs:
       runjobs: ${{ steps.continue.outputs.runjobs }}
       project_version: ${{ steps.continue.outputs.project_version }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - id: continue
         name: Determine if should continue
         if: env.RUN_JOBS == 'true'
         run: |
           # Run jobs if in upstream repository
-          echo "::set-output name=runjobs::true"
+          echo "runjobs=true" >> $GITHUB_OUTPUT
           # Extract version from gradle.properties
           version=$(cat gradle.properties | grep "version=" | awk -F'=' '{print $2}')
-          echo "::set-output name=project_version::$version"
+          echo "project_version=$version" >> $GITHUB_OUTPUT
   build:
     name: Build
     needs: [prerequisites]
@@ -39,19 +39,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     if: needs.prerequisites.outputs.runjobs
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Set up JDK ${{ matrix.jdk }}
-        uses: actions/setup-java@v1
+        uses: spring-io/spring-gradle-build-action@v2
         with:
           java-version: ${{ matrix.jdk }}
-      - name: Setup gradle user name
-        run: |
-          mkdir -p ~/.gradle
-          echo 'systemProp.user.name=spring-builds+github' >> ~/.gradle/gradle.properties
-      - name: Setup Gradle
-        uses: gradle/gradle-build-action@v2
-        env:
-          GRADLE_USER_HOME: ~/.gradle
+          distribution: temurin
       - name: Build with Gradle
         env:
           GRADLE_ENTERPRISE_CACHE_USERNAME: ${{ secrets.GRADLE_ENTERPRISE_CACHE_USER }}
@@ -66,13 +59,12 @@ jobs:
     runs-on: ubuntu-latest
     if: needs.prerequisites.outputs.runjobs
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Set up JDK
-        uses: actions/setup-java@v1
+        uses: spring-io/spring-gradle-build-action@v2
         with:
           java-version: 17
-      - name: Setup Gradle
-        uses: gradle/gradle-build-action@v2
+          distribution: temurin
       - name: Snapshot Tests
         env:
           GRADLE_ENTERPRISE_CACHE_USERNAME: ${{ secrets.GRADLE_ENTERPRISE_CACHE_USER }}
@@ -80,19 +72,18 @@ jobs:
           GRADLE_ENTERPRISE_ACCESS_KEY: ${{ secrets.GRADLE_ENTERPRISE_SECRET_ACCESS_KEY }}
           ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
           ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
-        run: ./gradlew test --refresh-dependencies -Duser.name=spring-builds+github -PartifactoryUsername="$ARTIFACTORY_USERNAME" -PartifactoryPassword="$ARTIFACTORY_PASSWORD" -PforceMavenRepositories=snapshot -PspringFrameworkVersion='6.0.+' -PspringSecurityVersion='6.0.+' -PlocksDisabled --stacktrace
+        run: ./gradlew test --refresh-dependencies -Duser.name=spring-builds+github -PartifactoryUsername="$ARTIFACTORY_USERNAME" -PartifactoryPassword="$ARTIFACTORY_PASSWORD" -PforceMavenRepositories=snapshot -PspringFrameworkVersion='6.0.+' -PspringSecurityVersion='6.1.+' -PlocksDisabled --stacktrace
   deploy_artifacts:
     name: Deploy Artifacts
     needs: [build, snapshot_tests]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Set up JDK
-        uses: actions/setup-java@v1
+        uses: spring-io/spring-gradle-build-action@v2
         with:
           java-version: 17
-      - name: Setup Gradle
-        uses: gradle/gradle-build-action@v2
+          distribution: temurin
       - name: Deploy Artifacts
         env:
           GRADLE_ENTERPRISE_CACHE_USERNAME: ${{ secrets.GRADLE_ENTERPRISE_CACHE_USER }}
@@ -110,13 +101,12 @@ jobs:
     needs: [build, snapshot_tests]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Set up JDK
-        uses: actions/setup-java@v1
+        uses: spring-io/spring-gradle-build-action@v2
         with:
           java-version: 17
-      - name: Setup Gradle
-        uses: gradle/gradle-build-action@v2
+          distribution: temurin
       - name: Deploy Docs
         env:
           GRADLE_ENTERPRISE_CACHE_USERNAME: ${{ secrets.GRADLE_ENTERPRISE_CACHE_USER }}
@@ -125,4 +115,4 @@ jobs:
           DOCS_USERNAME: ${{ secrets.DOCS_USERNAME }}
           DOCS_SSH_KEY: ${{ secrets.DOCS_SSH_KEY }}
           DOCS_HOST: ${{ secrets.DOCS_HOST }}
-        run: ./gradlew deployDocs -PdeployDocsSshKey="$DOCS_SSH_KEY" -PdeployDocsSshUsername="$DOCS_USERNAME" -PdeployDocsHost="$DOCS_HOST" --stacktrace
+        run: ./gradlew deployDocs -Duser.name=spring-builds+github -PdeployDocsSshKey="$DOCS_SSH_KEY" -PdeployDocsSshUsername="$DOCS_USERNAME" -PdeployDocsHost="$DOCS_HOST" --stacktrace

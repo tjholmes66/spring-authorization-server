@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 the original author or authors.
+ * Copyright 2020-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -128,6 +128,7 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
 import org.springframework.web.util.UriComponents;
 import org.springframework.web.util.UriComponentsBuilder;
+import org.springframework.web.util.UriUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.CoreMatchers.containsString;
@@ -287,16 +288,24 @@ public class OAuth2AuthorizationCodeGrantTests {
 	}
 
 	private void assertAuthorizationRequestRedirectsToClient(String authorizationEndpointUri) throws Exception {
-		RegisteredClient registeredClient = TestRegisteredClients.registeredClient().build();
+		RegisteredClient registeredClient = TestRegisteredClients.registeredClient()
+				.redirectUris(redirectUris -> {
+					redirectUris.clear();
+					redirectUris.add("https://example.com/callback-1?param=encoded%20parameter%20value");	// gh-1011
+				})
+				.build();
 		this.registeredClientRepository.save(registeredClient);
 
+		MultiValueMap<String, String> authorizationRequestParameters = getAuthorizationRequestParameters(registeredClient);
 		MvcResult mvcResult = this.mvc.perform(get(authorizationEndpointUri)
-				.params(getAuthorizationRequestParameters(registeredClient))
+				.params(authorizationRequestParameters)
 				.with(user("user")))
 				.andExpect(status().is3xxRedirection())
 				.andReturn();
 		String redirectedUrl = mvcResult.getResponse().getRedirectedUrl();
-		assertThat(redirectedUrl).matches("https://example.com\\?code=.{15,}&state=" + STATE_URL_ENCODED);
+		String redirectUri = authorizationRequestParameters.getFirst(OAuth2ParameterNames.REDIRECT_URI);
+		String code = extractParameterFromRedirectUri(redirectedUrl, "code");
+		assertThat(redirectedUrl).isEqualTo(redirectUri + "&code=" + code + "&state=" + STATE_URL_ENCODED);
 
 		String authorizationCode = extractParameterFromRedirectUri(redirectedUrl, "code");
 		OAuth2Authorization authorization = this.authorizationService.findByToken(authorizationCode, AUTHORIZATION_CODE_TOKEN_TYPE);
@@ -424,15 +433,17 @@ public class OAuth2AuthorizationCodeGrantTests {
 		RegisteredClient registeredClient = TestRegisteredClients.registeredClient().build();
 		this.registeredClientRepository.save(registeredClient);
 
+		MultiValueMap<String, String> authorizationRequestParameters = getAuthorizationRequestParameters(registeredClient);
 		MvcResult mvcResult = this.mvc.perform(get(DEFAULT_AUTHORIZATION_ENDPOINT_URI)
-				.params(getAuthorizationRequestParameters(registeredClient))
+				.params(authorizationRequestParameters)
 				.param(PkceParameterNames.CODE_CHALLENGE, S256_CODE_CHALLENGE)
 				.param(PkceParameterNames.CODE_CHALLENGE_METHOD, "S256")
 				.with(user("user")))
 				.andExpect(status().is3xxRedirection())
 				.andReturn();
 		String redirectedUrl = mvcResult.getResponse().getRedirectedUrl();
-		assertThat(redirectedUrl).matches("https://example.com\\?code=.{15,}&state=" + STATE_URL_ENCODED);
+		String expectedRedirectUri = authorizationRequestParameters.getFirst(OAuth2ParameterNames.REDIRECT_URI);
+		assertThat(redirectedUrl).matches(expectedRedirectUri + "\\?code=.{15,}&state=" + STATE_URL_ENCODED);
 
 		String authorizationCode = extractParameterFromRedirectUri(redirectedUrl, "code");
 		OAuth2Authorization authorizationCodeAuthorization = this.authorizationService.findByToken(authorizationCode, AUTHORIZATION_CODE_TOKEN_TYPE);
@@ -444,6 +455,36 @@ public class OAuth2AuthorizationCodeGrantTests {
 				.param(OAuth2ParameterNames.CLIENT_ID, registeredClient.getClientId())
 				.header(HttpHeaders.AUTHORIZATION, getAuthorizationHeader(registeredClient)))
 				.andExpect(status().isBadRequest());
+	}
+
+	// gh-1011
+	@Test
+	public void requestWhenConfidentialClientWithPkceAndMissingCodeChallengeThenErrorResponseEncoded() throws Exception {
+		this.spring.register(AuthorizationServerConfiguration.class).autowire();
+
+		String redirectUri = "https://example.com/callback-1?param=encoded%20parameter%20value";
+		RegisteredClient registeredClient = TestRegisteredClients.registeredClient()
+				.redirectUris(redirectUris -> {
+					redirectUris.clear();
+					redirectUris.add(redirectUri);
+				})
+				.clientSettings(ClientSettings.builder().requireProofKey(true).build())
+				.build();
+		this.registeredClientRepository.save(registeredClient);
+
+		MultiValueMap<String, String> authorizationRequestParameters = getAuthorizationRequestParameters(registeredClient);
+		MvcResult mvcResult = this.mvc.perform(get(DEFAULT_AUTHORIZATION_ENDPOINT_URI)
+				.params(authorizationRequestParameters)
+				.with(user("user")))
+				.andExpect(status().is3xxRedirection())
+				.andReturn();
+		String redirectedUrl = mvcResult.getResponse().getRedirectedUrl();
+		String expectedRedirectUri = redirectUri + "&" +
+				"error=invalid_request&" +
+				"error_description=" + UriUtils.encode("OAuth 2.0 Parameter: code_challenge", StandardCharsets.UTF_8) + "&" +
+				"error_uri=" + UriUtils.encode("https://datatracker.ietf.org/doc/html/rfc7636#section-4.4.1", StandardCharsets.UTF_8) + "&" +
+				"state=" + STATE_URL_ENCODED;
+		assertThat(redirectedUrl).isEqualTo(expectedRedirectUri);
 	}
 
 	@Test
@@ -528,7 +569,7 @@ public class OAuth2AuthorizationCodeGrantTests {
 				.andReturn();
 
 		String redirectedUrl = mvcResult.getResponse().getRedirectedUrl();
-		assertThat(redirectedUrl).matches("https://example.com\\?code=.{15,}&state=" + STATE_URL_ENCODED);
+		assertThat(redirectedUrl).matches(authorizationRequest.getRedirectUri() + "\\?code=.{15,}&state=" + STATE_URL_ENCODED);
 
 		String authorizationCode = extractParameterFromRedirectUri(redirectedUrl, "code");
 		OAuth2Authorization authorizationCodeAuthorization = this.authorizationService.findByToken(authorizationCode, AUTHORIZATION_CODE_TOKEN_TYPE);
@@ -615,7 +656,7 @@ public class OAuth2AuthorizationCodeGrantTests {
 				.andReturn();
 
 		String redirectedUrl = mvcResult.getResponse().getRedirectedUrl();
-		assertThat(redirectedUrl).matches("https://example.com\\?code=.{15,}&state=" + STATE_URL_ENCODED);
+		assertThat(redirectedUrl).matches(authorizationRequest.getRedirectUri() + "\\?code=.{15,}&state=" + STATE_URL_ENCODED);
 
 		String authorizationCode = extractParameterFromRedirectUri(redirectedUrl, "code");
 		OAuth2Authorization authorizationCodeAuthorization = this.authorizationService.findByToken(authorizationCode, AUTHORIZATION_CODE_TOKEN_TYPE);
